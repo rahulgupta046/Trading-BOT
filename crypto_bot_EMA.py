@@ -172,7 +172,6 @@ def get_data(catchUp=False):
         for crypto in cryptos[:2]:
             print('Catching up' if catchUp else 'Getting request of',
                   crypto, end='\r')
-
             if catchUp:
                 # Find the last correct closed candle
                 lastCloseTime = None
