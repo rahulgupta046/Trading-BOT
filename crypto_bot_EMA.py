@@ -11,6 +11,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from binance.client import Client
 from datetime import datetime, timedelta
+import os
 load_dotenv()
 
 
