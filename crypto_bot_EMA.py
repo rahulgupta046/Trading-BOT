@@ -7,6 +7,11 @@ import json
 import pprint
 from variables import streams5m, stream5m_test, cryptos
 import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
+from binance.client import Client
+from datetime import datetime, timedelta
+load_dotenv()
 
 
 def average(x, n):
@@ -489,50 +494,119 @@ def sell(crypto, price):
         print('programming error on sell:', e)
 
 
+def handle_socket_message(msg):
+    columns = ['open_time', 'open', 'high', 'low', 'close', 'volume']
+    # Extract the relevant data from the WebSocket message
+    open_time = pd.to_datetime(int(msg['k']['t']), unit='ms')
+    open_price = float(msg['k']['o'])
+    high_price = float(msg['k']['h'])
+    low_price = float(msg['k']['l'])
+    close_price = float(msg['k']['c'])
+    volume = float(msg['k']['v'])
+
+    # Append a new row to the DataFrame
+    row = pd.DataFrame([[open_time, open_price, high_price,
+                       low_price, close_price, volume]], columns=columns)
+    df = df.append(row, ignore_index=True)
+
+    # TODO update indicators
+
+
 def init_socket():
-    global ws
+    # Define the column names for the DataFrame
+    columns = ['open_time', 'open', 'high', 'low', 'close', 'volume']
 
-    # Wait till there is sufficient time between requests and new candlesticks
-    wait()
+    # Create an empty DataFrame
+    df = pd.DataFrame(columns=columns)
+    # Get Past one hour data and store into database
 
-    ws = None
+    # Calculate the start and end timestamps for the desired 1-hour period
+    end_time = datetime.now()
+    start_time = end_time - timedelta(hours=1)
+    interval = Client.KLINE_INTERVAL_5MINUTE
+    # Retrieve the Kline data from the Binance API
+    klines = client.get_historical_klines(symbol, interval, start_time.strftime(
+        '%Y-%m-%d %H:%M:%S'), end_time.strftime('%Y-%m-%d %H:%M:%S'))
 
-    SOCKET = 'wss://stream.binance.com:9443/stream?streams='+stream5m_test
+    # Iterate over the retrieved Kline data and insert it into the database
+    for kline in klines:
+        # Convert milliseconds to seconds
+        open_time = pd.to_datetime(int(kline[0]), unit='ms')
+        open_price = float(kline[1])
+        high_price = float(kline[2])
+        low_price = float(kline[3])
+        close_price = float(kline[4])
+        volume = float(kline[5])
 
-    # If 5 seconds passed since last connection response, raise an error.
-    websocket.setdefaulttimeout(5)
-    ws = websocket.WebSocketApp(SOCKET, on_open=on_open, on_close=on_close,
-                                on_message=on_message, on_error=on_error)
-    ws.run_forever()
+        # Append a new row to the DataFrame
+        row = pd.DataFrame([[open_time, open_price, high_price,
+                             low_price, close_price, volume]], columns=columns)
+        df = df.append(row, ignore_index=True)
+
+    # Create a WebSocket client
+    websocket_client = Client(api_key=apiKey, api_secret=secretKey)
+
+    # # Define the stream name
+    # stream_name = symbol + '@kline_5m'
+
+    # Define the WebSocket callback function
+    def websocket_callback(msg):
+        handle_socket_message(msg)
+
+    def websocket_error(err):
+        print("Error with the socket - ", err)
+        # TODO - consider already open offers.
+        client.stop_socket(websocket_client)
+
+    # Start the WebSocket stream
+    websocket_client.start_kline_socket(
+        callback=websocket_callback, symbol=symbol,
+        interval=Client.KLINE_INTERVAL_5MINUTE,
+        error=websocket_error).run_forever()
+
+    # global ws
+
+    # # Wait till there is sufficient time between requests and new candlesticks
+    # wait()
+
+    # ws = None
+
+    # SOCKET = 'wss://stream.binance.com:9443/stream?streams='+stream5m_test
+
+    # # If 5 seconds passed since last connection response, raise an error.
+    # websocket.setdefaulttimeout(5)
+    # ws = websocket.WebSocketApp(SOCKET, on_open=on_open, on_close=on_close,
+    #                             on_message=on_message, on_error=on_error)
+    # ws.run_forever()
 
 
-def on_open(ws):
-    print('Opened connection.')
-    global connectionFailed
+# def on_open(ws):
+#     print('Opened connection.')
+#     global connectionFailed
 
-    get_data(connectionFailed)
+#     get_data(connectionFailed)
 
-    connectionFailed = False
-
-
-def on_close(ws):
-    print('Closed connection.')
+#     connectionFailed = False
 
 
-def on_error(ws, err):
-    print('Socket disconnected due to', err)
-    print('Trying to reconnect socket...')
-    global connectionFailed
+# def on_close(ws):
+#     print('Closed connection.')
 
-    time.sleep(5)
 
-    connectionFailed = True
-    # Close current websocket to avoid overlapping multiple connections
-    # when connection returns
-    ws.close(status=1002)
+# def on_error(ws, err):
+#     print('Socket disconnected due to', err)
+#     print('Trying to reconnect socket...')
+#     global connectionFailed
 
-    print('Trying to recover lost data...')
-    init_socket()
+#     time.sleep(5)
+
+#     connectionFailed = True
+#     # Close current websocket to avoid overlapping multiple connections
+#     # when connection returns
+#     ws.close(status=1002)
+
+#     print('Trying to recover lost data...')
+#     init_socket()
 
 
 def on_message(ws, message):
@@ -636,6 +710,9 @@ LEVERAGE = 5  # Futures leverage
 MAKERFEERATE = 0.00018
 TAKERFEERATE = 0.00036
 
+apiKey = os.getenv('API_KEY')
+secretKey = os.getenv('SECRET_KEY')
+
 """
 A little explanation on how leverage positions are coded.
 Opening a position is buying from now on, even it is a short position, it is
@@ -687,4 +764,6 @@ init_wallet()
 
 # Initialize websocket connection
 ws = None  # socket
+symbol = 'BTCUSDT'
+client = Client(api_key=apiKey, api_secret=secretKey)
 init_socket()
