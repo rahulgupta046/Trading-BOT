@@ -5,6 +5,7 @@ import talib
 import random
 import json
 import pprint
+from indicators import MACD, RSI, VolumeIndicator
 from variables import streams5m, stream5m_test, cryptos
 import numpy as np
 import pandas as pd
@@ -13,48 +14,6 @@ from binance.client import Client
 from datetime import datetime, timedelta
 import os
 load_dotenv()
-
-
-def average(x, n):
-    """ Return the average of last n samples of x. """
-    return sum(x[-n:])/n
-
-
-def movingAverage(x, n):
-    """ Calculate the average of x in [0:n+1, 1:n+2, ..., l-n:l+1] """
-    l = len(x)
-    return [average(x[:n+i+1], n) for i in range(l-n)]
-
-
-def EMA(x, n, smoothing=2):
-    """ Calculate the exponential moving average of x in
-    [0:n+1, 1:n+2, ..., l-n:l+1].
-
-    The first EMA is a SMA (Simple Moving Average). """
-
-    ema = [average(x[:n], n)]  # The first sample is a SMA.
-
-    p = smoothing / (n+1)  # Rho, weight factor.
-
-    for price in x[n:]:
-        ema.append(price*p + ema[-1]*(1-p))
-
-    return ema
-
-
-def updateEMA(actual, previous, n, smoothing=2):
-    """ Return new value of EMA using the previous EMA sample. """
-    global ema
-
-    p = smoothing / (n+1)  # Rho, weight factor.
-    return actual*p + previous*(1-p)
-
-
-def relativeStrengthIndicator(x, period, n=1):
-    """Calculates the rsi-period of the last n samples."""
-    # may be inefficient and does not match with binance rsi
-    # Pass to talib the last n+period samples and remove NaN from the result.
-    return talib.RSI(np.array(x[-(n+period):]), period)[period:]
 
 
 def diff(x, N=1):
@@ -171,114 +130,114 @@ def calculateThresholds(crypto, verbose=False):
     return (avgWin, avgLoss) if avgWin > 0.005 else (None, None)
 
 
-def get_data(catchUp=False):
-    global candles, closes, ma, ema, rsi, thresholds, lastTradeTime
+# def get_data(catchUp=False):
+#     global candles, closes, ma, ema, rsi, thresholds, lastTradeTime
 
-    try:
-        for crypto in cryptos[:2]:
-            print('Catching up' if catchUp else 'Getting request of',
-                  crypto, end='\r')
-            if catchUp:
-                # Find the last correct closed candle
-                lastCloseTime = None
-                i = 1
-                while not lastCloseTime:
-                    # If the candle -i is a close candle
-                    if candles[crypto][-i]['x']:
-                        lastCloseTime = candles[crypto][-i]['T']/1000
-                    else:
-                        i += 1
+#     try:
+#         for crypto in cryptos[:2]:
+#             print('Catching up' if catchUp else 'Getting request of',
+#                   crypto, end='\r')
+#             if catchUp:
+#                 # Find the last correct closed candle
+#                 lastCloseTime = None
+#                 i = 1
+#                 while not lastCloseTime:
+#                     # If the candle -i is a close candle
+#                     if candles[crypto][-i]['x']:
+#                         lastCloseTime = candles[crypto][-i]['T']/1000
+#                     else:
+#                         i += 1
 
-                # Get last close real time
-                timeNow = time.gmtime()
-                extraMin = timeNow.tm_min % 5
-                lastCloseRealTime = time.time()-extraMin*60-timeNow.tm_sec
+#                 # Get last close real time
+#                 timeNow = time.gmtime()
+#                 extraMin = timeNow.tm_min % 5
+#                 lastCloseRealTime = time.time()-extraMin*60-timeNow.tm_sec
 
-                # Difference in seconds
-                diffTime = int(lastCloseRealTime - lastCloseTime)
+#                 # Difference in seconds
+#                 diffTime = int(lastCloseRealTime - lastCloseTime)
 
-                # Difference in 5 min candles
-                diffCandles = int(round(diffTime/(60*5), 1))
+#                 # Difference in 5 min candles
+#                 diffCandles = int(round(diffTime/(60*5), 1))
 
-                assert diffTime % (60*5) < 100, 'Misaligned time calculus'
+#                 assert diffTime % (60*5) < 100, 'Misaligned time calculus'
 
-                # +1 because it requests the last non-closed too, which is
-                # not needed
-                limit = diffCandles+1 if diffCandles != 0 else None
+#                 # +1 because it requests the last non-closed too, which is
+#                 # not needed
+#                 limit = diffCandles+1 if diffCandles != 0 else None
 
-            else:
-                limit = 1000
+#             else:
+#                 limit = 1000
 
-            # Get limit entries, if limit != 0
-            if limit:
-                url = ('https://api.binance.com/api/v3/klines?symbol='+crypto +
-                       '&interval=5m&limit='+str(limit))
-                try:
-                    # Remove last candle because it may not be closed
-                    newCandles = requests.get(url).json()[:-1]
+#             # Get limit entries, if limit != 0
+#             if limit:
+#                 url = ('https://api.binance.com/api/v3/klines?symbol='+crypto +
+#                        '&interval=5m&limit='+str(limit))
+#                 try:
+#                     # Remove last candle because it may not be closed
+#                     newCandles = requests.get(url).json()[:-1]
 
-                    # Modify kline structure to match API with websocket
-                    newCandles = [{
-                        't': x[0],
-                        'T': x[6],
-                        's': crypto,
-                        'i': '5m',
-                        'f': None,
-                        'L': None,
-                        'o': x[1],
-                        'c': x[4],
-                        'h': float(x[2]),
-                        'l': x[3],
-                        'v': x[5],
-                        'n': x[8],
-                        'x': True,
-                        'q': x[7],
-                        'V': x[9],
-                        'Q': x[10],
-                        'B': x[11]
-                    } for x in newCandles]
+#                     # Modify kline structure to match API with websocket
+#                     newCandles = [{
+#                         't': x[0],
+#                         'T': x[6],
+#                         's': crypto,
+#                         'i': '5m',
+#                         'f': None,
+#                         'L': None,
+#                         'o': x[1],
+#                         'c': x[4],
+#                         'h': float(x[2]),
+#                         'l': x[3],
+#                         'v': x[5],
+#                         'n': x[8],
+#                         'x': True,
+#                         'q': x[7],
+#                         'V': x[9],
+#                         'Q': x[10],
+#                         'B': x[11]
+#                     } for x in newCandles]
 
-                    if not catchUp:
-                        candles[crypto] = []
-                        closes[crypto] = []
-                        ma[crypto] = {50: [None]*50, 14: [None]*14,
-                                      6: [None]*6}
-                        ema[crypto] = {50: [None]*50, 20: [None]*20}
-                        rsi[crypto] = []
-                        lastTradeTime[crypto] = None
+#                     if not catchUp:
+#                         candles[crypto] = []
+#                         closes[crypto] = []
+#                         ma[crypto] = {50: [None]*50, 14: [None]*14,
+#                                       6: [None]*6}
+#                         ema[crypto] = {50: [None]*50, 20: [None]*20}
+#                         rsi[crypto] = []
+#                         lastTradeTime[crypto] = None
 
-                    candles[crypto].extend(newCandles)
-                    closes[crypto].extend([float(x['c']) for x in newCandles])
+#                     candles[crypto].extend(newCandles)
+#                     closes[crypto].extend([float(x['c']) for x in newCandles])
 
-                    # Calculate moving averages
-                    for n in [6, 14, 50]:
-                        # Only calculate for the last int(limit)-1 values
-                        ma[crypto][n].extend(movingAverage(
-                                             closes[crypto][-limit+1:], n))
+#                     # Calculate moving averages
+#                     for n in [6, 14, 50]:
+#                         # Only calculate for the last int(limit)-1 values
+#                         ma[crypto][n].extend(movingAverage(
+#                                              closes[crypto][-limit+1:], n))
 
-                    # Calculate exponential moving averages
-                    for n in [20, 50]:
-                        # Only calculate for the last int(limit)-1 values
-                        ema[crypto][n].extend(EMA(
-                                              closes[crypto][-limit+1:], n))
+#                     # Calculate exponential moving averages
+#                     for n in [20, 50]:
+#                         # Only calculate for the last int(limit)-1 values
+#                         ema[crypto][n].extend(EMA(
+#                                               closes[crypto][-limit+1:], n))
 
-                    rsi[crypto].extend(relativeStrengthIndicator(
-                        closes[crypto], RSI_PERIOD, limit-1))
+#                     rsi[crypto].extend(relativeStrengthIndicator(
+#                         closes[crypto], RSI_PERIOD, limit-1))
 
-                    # thresholds[crypto] = calculateThresholds(crypto,
-                    #                                         verbose=True)
+#                     # thresholds[crypto] = calculateThresholds(crypto,
+#                     #                                         verbose=True)
 
-                    print('Catching up' if catchUp else 'Getting request of',
-                          crypto, ' '*(10-len(crypto)), 'OK')
-                except Exception as e:
-                    print('Catching up' if catchUp else 'Getting request of',
-                          crypto, ' '*(10-len(crypto)), 'ERROR', e)
-        print('\n\n\n')
-        # printThresholds()
-        # updateThresholds()
+#                     print('Catching up' if catchUp else 'Getting request of',
+#                           crypto, ' '*(10-len(crypto)), 'OK')
+#                 except Exception as e:
+#                     print('Catching up' if catchUp else 'Getting request of',
+#                           crypto, ' '*(10-len(crypto)), 'ERROR', e)
+#         print('\n\n\n')
+#         # printThresholds()
+#         # updateThresholds()
 
-    except Exception as e:
-        print('programming error on get_data:', e)
+#     except Exception as e:
+#         print('programming error on get_data:', e)
 
 
 def getBnbPrice():
@@ -326,72 +285,72 @@ def updateTradeHistory(crypto, action, long, price, nCoins, total, fee, time,
         textFile.write(json.dumps(trade)+'\n')
 
 
-def isGoingToRise(crypto, verbose=False):
-    try:
-        ema20 = ema[crypto][20][-3]
-        ema50 = ema[crypto][50][-3]
-        fractalMin = float(candles[crypto][-3]['l'])
+# def isGoingToRise(crypto, verbose=False):
+#     try:
+#         ema20 = ema[crypto][20][-3]
+#         ema50 = ema[crypto][50][-3]
+#         fractalMin = float(candles[crypto][-3]['l'])
 
-        print(ema20, '>', fractalMin, '>', ema50, '?') if verbose else None
+#         print(ema20, '>', fractalMin, '>', ema50, '?') if verbose else None
 
-        print(fractalMin, '<', candles[crypto][-5]['l'],
-              '?') if verbose else None
-        print(fractalMin, '<', candles[crypto][-4]['l'],
-              '?') if verbose else None
-        print(fractalMin, '<', candles[crypto][-2]['l'],
-              '?') if verbose else None
-        print(fractalMin, '<', candles[crypto][-1]['l'],
-              '?') if verbose else None
+#         print(fractalMin, '<', candles[crypto][-5]['l'],
+#               '?') if verbose else None
+#         print(fractalMin, '<', candles[crypto][-4]['l'],
+#               '?') if verbose else None
+#         print(fractalMin, '<', candles[crypto][-2]['l'],
+#               '?') if verbose else None
+#         print(fractalMin, '<', candles[crypto][-1]['l'],
+#               '?') if verbose else None
 
-        # Is minimum fractal and the minimum is below the ema20 and above the
-        # ema50.
-        if (ema20 > fractalMin > ema50 and
-           fractalMin < float(candles[crypto][-5]['l']) and
-           fractalMin < float(candles[crypto][-4]['l']) and
-           fractalMin < float(candles[crypto][-2]['l']) and
-           fractalMin < float(candles[crypto][-1]['l'])):
+#         # Is minimum fractal and the minimum is below the ema20 and above the
+#         # ema50.
+#         if (ema20 > fractalMin > ema50 and
+#            fractalMin < float(candles[crypto][-5]['l']) and
+#            fractalMin < float(candles[crypto][-4]['l']) and
+#            fractalMin < float(candles[crypto][-2]['l']) and
+#            fractalMin < float(candles[crypto][-1]['l'])):
 
-            print('Yes') if verbose else None
-            return True
+#             print('Yes') if verbose else None
+#             return True
 
-    except Exception as e:
-        print('Programming error on isGoingToRise:', e)
+#     except Exception as e:
+#         print('Programming error on isGoingToRise:', e)
 
-    return False
+#     return False
 
 
-def isGoingToFall(crypto, verbose):
-    try:
-        ema20 = ema[crypto][20][-3]
-        ema50 = ema[crypto][50][-3]
-        fractalMax = float(candles[crypto][-3]['h'])
+# def isGoingToFall(crypto, verbose):
+#     try:
+#         ema20 = ema[crypto][20][-3]
+#         ema50 = ema[crypto][50][-3]
+#         fractalMax = float(candles[crypto][-3]['h'])
 
-        print(ema20, '<', fractalMax, '<', ema50, '?') if verbose else None
+#         print(ema20, '<', fractalMax, '<', ema50, '?') if verbose else None
 
-        print(fractalMax, '>', candles[crypto][-5]['h'],
-              '?') if verbose else None
-        print(fractalMax, '>', candles[crypto][-4]['h'],
-              '?') if verbose else None
-        print(fractalMax, '>', candles[crypto][-2]['h'],
-              '?') if verbose else None
-        print(fractalMax, '>', candles[crypto][-1]['h'],
-              '?') if verbose else None
+#         print(fractalMax, '>', candles[crypto][-5]['h'],
+#               '?') if verbose else None
+#         print(fractalMax, '>', candles[crypto][-4]['h'],
+#               '?') if verbose else None
+#         print(fractalMax, '>', candles[crypto][-2]['h'],
+#               '?') if verbose else None
+#         print(fractalMax, '>', candles[crypto][-1]['h'],
+#               '?') if verbose else None
 
-        # Is maximum fractal and the maximum is above the ema20 and below the
-        # ema50.
-        if (ema20 < fractalMax < ema50 and
-           fractalMax > float(candles[crypto][-5]['h']) and
-           fractalMax > float(candles[crypto][-4]['h']) and
-           fractalMax > float(candles[crypto][-2]['h']) and
-           fractalMax > float(candles[crypto][-1]['h'])):
+#         # Is maximum fractal and the maximum is above the ema20 and below the
+#         # ema50.
+#         if (ema20 < fractalMax < ema50 and
+#            fractalMax > float(candles[crypto][-5]['h']) and
+#            fractalMax > float(candles[crypto][-4]['h']) and
+#            fractalMax > float(candles[crypto][-2]['h']) and
+#            fractalMax > float(candles[crypto][-1]['h'])):
 
-            print('Yes') if verbose else None
-            return True
+#             print('Yes') if verbose else None
+#             return True
 
-    except Exception as e:
-        print('Programming error on isGoingToFall:', e)
+#     except Exception as e:
+#         print('Programming error on isGoingToFall:', e)
 
-    return False
+#     return False
 
 
 def buy(crypto, long):
@@ -495,7 +454,18 @@ def sell(crypto, price):
         print('programming error on sell:', e)
 
 
-def handle_socket_message(msg):
+'''
+Updates the data and indicators, generates trade signals 
+and execute trades if condition is met
+'''
+
+
+def calculate_function():
+    pass
+
+
+def handle_kline_message(msg):
+
     columns = ['open_time', 'open', 'high', 'low', 'close', 'volume']
     # Extract the relevant data from the WebSocket message
     open_time = pd.to_datetime(int(msg['k']['t']), unit='ms')
@@ -508,12 +478,45 @@ def handle_socket_message(msg):
     # Append a new row to the DataFrame
     row = pd.DataFrame([[open_time, open_price, high_price,
                        low_price, close_price, volume]], columns=columns)
-    df = df.append(row, ignore_index=True)
+    data = data.append(row, ignore_index=True)
 
-    # TODO update indicators
+    # update indicators and get signals
+    signals = {}
+    signals['MACD'] = macd.update_trade_signal(data)
+    signals['RSI'] = rsi.update_trade_signal(data)
+    signals['volume'] = volume.update_trade_signal(data)
+
+    # CONDITION FOR LONG TRADE
+    if signals['MACD'] == signals["RSI"] == "Buy" and signals['volume']:
+        buy = True
+        # TODO calculate target and stop loss
+        target, sl, fees = calculate_function(buy)
+        # TODO execute trade
+        # TODO log trade
+        pass
+
+    # CONDITION FOR SHORT TRADE
+    elif signals['MACD'] == signals["RSI"] == "Sell" and signals['volume']:
+        sell = True
+        # TODO prereq
+        # if prereq
+        # TODO calculate target and stop loss
+        target, sl, fees = calculate_function(buy)
+        # TODO execute trade
+        # TODO log trade
+        pass
 
 
-def init_socket():
+def handle_mini_ticker_stream(msg):
+    pass
+
+
+'''
+returns indicator objects and the previous data -> data, macd, rsi, volume indicator
+'''
+
+
+def get_data():
     # Define the column names for the DataFrame
     columns = ['open_time', 'open', 'high', 'low', 'close', 'volume']
 
@@ -544,15 +547,20 @@ def init_socket():
                              low_price, close_price, volume]], columns=columns)
         df = df.append(row, ignore_index=True)
 
-    # Create a WebSocket client
+    # Init Indicators
+    macd = MACD(data=df)
+    rsi = RSI(data=df)
+    volumeIndicator = VolumeIndicator(data=df)
+
+    return [df, macd, rsi, volumeIndicator]
+
+
+def init_socket():
+
     websocket_client = Client(api_key=apiKey, api_secret=secretKey)
 
-    # # Define the stream name
-    # stream_name = symbol + '@kline_5m'
-
-    # Define the WebSocket callback function
-    def websocket_callback(msg):
-        handle_socket_message(msg)
+    # Create a WebSocket client
+    websocket_client = Client(api_key=apiKey, api_secret=secretKey)
 
     def websocket_error(err):
         print("Error with the socket - ", err)
@@ -561,53 +569,16 @@ def init_socket():
 
     # Start the WebSocket stream
     websocket_client.start_kline_socket(
-        callback=websocket_callback, symbol=symbol,
+        callback=handle_kline_message, symbol=symbol,
         interval=Client.KLINE_INTERVAL_5MINUTE,
-        error=websocket_error).run_forever()
+        error=websocket_error)
 
-    # global ws
+    # start miniticker for latest symbol price
+    websocket_client.start_miniticker_socket(
+        callback=handle_mini_ticker_stream,
+        symbol=symbol)
 
-    # # Wait till there is sufficient time between requests and new candlesticks
-    # wait()
-
-    # ws = None
-
-    # SOCKET = 'wss://stream.binance.com:9443/stream?streams='+stream5m_test
-
-    # # If 5 seconds passed since last connection response, raise an error.
-    # websocket.setdefaulttimeout(5)
-    # ws = websocket.WebSocketApp(SOCKET, on_open=on_open, on_close=on_close,
-    #                             on_message=on_message, on_error=on_error)
-    # ws.run_forever()
-
-
-# def on_open(ws):
-#     print('Opened connection.')
-#     global connectionFailed
-
-#     get_data(connectionFailed)
-
-#     connectionFailed = False
-
-
-# def on_close(ws):
-#     print('Closed connection.')
-
-
-# def on_error(ws, err):
-#     print('Socket disconnected due to', err)
-#     print('Trying to reconnect socket...')
-#     global connectionFailed
-
-#     time.sleep(5)
-
-#     connectionFailed = True
-#     # Close current websocket to avoid overlapping multiple connections
-#     # when connection returns
-#     ws.close(status=1002)
-
-#     print('Trying to recover lost data...')
-#     init_socket()
+    websocket_client.run_forever()
 
 
 def on_message(ws, message):
@@ -767,4 +738,7 @@ init_wallet()
 ws = None  # socket
 symbol = 'BTCUSDT'
 client = Client(api_key=apiKey, api_secret=secretKey)
+
+
+data, macd, rsi, volume = get_data()
 init_socket()
