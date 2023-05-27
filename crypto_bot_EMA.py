@@ -18,8 +18,10 @@ load_dotenv()
 def init_wallet():
     global wallet
     wallet['USDT'] = INIT_USDT
-    wallet['BNBFORFEE'] = INIT_BNB
+    wallet['BNB'] = INIT_BNB
     wallet['BTCUSDT'] = 0
+
+    print("wallet initialized")
 
 
 def getBnbPrice():
@@ -112,9 +114,11 @@ returns bool value
 
 def prereq():
     global wallet
-    if wallet['BNBFORFEE'] < get_fees():
+    print("checking prereq")
+    print(wallet)
+    if wallet['BNB'] < get_fees():
         print("ADD MORE BNB")
-    return wallet['USDT'] > TRADE_SIZE and wallet['BNBFORFEE'] > get_fees()
+    return wallet['USDT'] > TRADE_SIZE and wallet['BNB'] > get_fees()
 
 
 '''
@@ -124,6 +128,7 @@ First created locally
 
 
 def execute_order(order, triggered):
+    print("exec order checking")
     global stream, open_orders, open_position
 
     latest_row = stream.iloc[-1]
@@ -138,12 +143,12 @@ def execute_order(order, triggered):
             # BUY ORDER
             # changes to the wallet
             wallet['USDT'] -= 10
-            wallet['BNBFORFEE'] -= trade_fees
+            wallet['BNB'] -= trade_fees
             wallet['BTC'] += order.btcQuant
         else:
             # SELL ORDER
             wallet['USDT'] += 10
-            wallet['BNBFORFEE'] -= trade_fees
+            wallet['BNB'] -= trade_fees
             wallet['BTC'] -= order.btcQuant
 
     else:
@@ -155,13 +160,14 @@ def execute_order(order, triggered):
             # closing BUY ORDER => sell btc
             # changes to the wallet
             wallet['USDT'] += trade_price * order.btcQuant
-            wallet['BNBFORFEE'] -= trade_fees
+            wallet['BNB'] -= trade_fees
             wallet['BTC'] -= order.btcQuant
         else:
             # closing SELL ORDER => buy back btc
             wallet['USDT'] -= trade_price * order.btcQuant
-            wallet['BNBFORFEE'] -= trade_fees
+            wallet['BNB'] -= trade_fees
             wallet['BTC'] += order.btcQuant
+    print("exec order checked")
 
 
 '''
@@ -342,7 +348,7 @@ When selling:
 """
 wallet = {}
 
-# init_wallet()
+init_wallet()
 
 symbol = 'BTCUSDT'
 client = Client(api_key=apiKey, api_secret=secretKey)
