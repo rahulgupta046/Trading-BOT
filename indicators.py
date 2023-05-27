@@ -16,7 +16,7 @@ returns
 class MACD:
     def __init__(self, data) -> None:
         self.macd_data = ta.trend.MACD(close=data['close'])
-        self.macd_line = self.macd_data.macd()
+        self.macd_line = self.macd_data.macd().dropna()
         self.signal_line = self.macd_data.macd_signal()
 
     def update_trade_signal(self, data):
@@ -26,10 +26,11 @@ class MACD:
         self.signal_line = self.macd_data.macd_signal()
 
         # Condition for a buy signal
-        buy_signal = self.macd_line > self.signal_line
+        # MACD line crosses over signal line(latest is greater and second_latest is smaller)
+        buy_signal = self.macd_line.values[-1] > self.signal_line.values[-1] and self.macd_line.values[-2] < self.signal_line.values[-2]
 
         # Condition for a sell signal
-        sell_signal = self.macd_line < self.signal_line
+        sell_signal = self.macd_line.values[-1] < self.signal_line.values[-1] and self.macd_line.values[-2] > self.signal_line.values[-2]
 
         if buy_signal:
             return "Buy"
@@ -88,7 +89,7 @@ class VolumeIndicator:
         # Getting the updated data
         self.volume = data['volume']
         # check if > past 10 average
-        val = self.volume[-1] > self.vmean10
+        val = self.volume.values[-1] > self.vmean10
 
         # update vmean10
         self.vmean10 = np.mean(data['volume'][-10::])
