@@ -15,21 +15,26 @@ returns
 
 class MACD:
     def __init__(self, data) -> None:
-        self.macd_data = ta.trend.MACD(close=data['close'])
-        self.macd_line = self.macd_data.macd()
+        self.macd_data = ta.trend.MACD(
+            close=data['close'], window_slow=20, window_fast=10, window_sign=7)
+        self.macd_line = self.macd_data.macd().dropna()
         self.signal_line = self.macd_data.macd_signal()
 
     def update_trade_signal(self, data):
         # Perform updates
-        self.macd_data = ta.trend.MACD(close=data['close'])
+        self.macd_data = ta.trend.MACD(
+            close=data['close'], window_slow=20, window_fast=10, window_sign=7)
         self.macd_line = self.macd_data.macd()
         self.signal_line = self.macd_data.macd_signal()
+        # print("MACD LINE LAST 2 vals- ", self.macd_line.values[-2:])
+        # print("SIGNAL LINE LAST 2 vals- ", self.signal_line.values[-2:])
 
         # Condition for a buy signal
-        buy_signal = self.macd_line > self.signal_line
+        # MACD line crosses over signal line(latest is greater and second_latest is smaller)
+        buy_signal = self.macd_line.values[-1] > self.signal_line.values[-1] and self.macd_line.values[-2] < self.signal_line.values[-2]
 
         # Condition for a sell signal
-        sell_signal = self.macd_line < self.signal_line
+        sell_signal = self.macd_line.values[-1] < self.signal_line.values[-1] and self.macd_line.values[-2] > self.signal_line.values[-2]
 
         if buy_signal:
             return "Buy"
@@ -58,10 +63,10 @@ class RSI:
         # perform Updates
         self.indicator = ta.momentum.RSIIndicator(data['close'], window=14)
         self.rsi_values = self.indicator.rsi().values
-
+        # print("RSI - ", self.rsi_values[-1])
         # Generate signal and return
-        buy_signal = (self.rsi_values[-1] < 30)
-        sell_signal = (self.rsi_values[-1] > 70)
+        buy_signal = (self.rsi_values[-1] <= 30)
+        sell_signal = (self.rsi_values[-1] >= 70)
 
         if buy_signal:
             return "Buy"
@@ -71,7 +76,6 @@ class RSI:
             return "No Signal"
 
 
-# TODO check volume indicator with pops
 '''
 function takes in new data. get_signal function returns bool value
 True - trade supported by volume
@@ -88,7 +92,7 @@ class VolumeIndicator:
         # Getting the updated data
         self.volume = data['volume']
         # check if > past 10 average
-        val = self.volume[-1] > self.vmean10
+        val = self.volume.values[-1] > self.vmean10
 
         # update vmean10
         self.vmean10 = np.mean(data['volume'][-10::])

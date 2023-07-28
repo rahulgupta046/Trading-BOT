@@ -1,284 +1,27 @@
 import websocket
+import json
 import requests
 import time
-import talib
-import random
 import json
-import pprint
-from variables import streams5m, stream5m_test, cryptos
+from indicators import MACD, RSI, VolumeIndicator
+from helper import TRADE_SIZE, OpenOrder, TAKER_TRADING_FEE
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 from binance.client import Client
 from datetime import datetime, timedelta
 import os
+import threading
 load_dotenv()
-
-
-def average(x, n):
-    """ Return the average of last n samples of x. """
-    return sum(x[-n:])/n
-
-
-def movingAverage(x, n):
-    """ Calculate the average of x in [0:n+1, 1:n+2, ..., l-n:l+1] """
-    l = len(x)
-    return [average(x[:n+i+1], n) for i in range(l-n)]
-
-
-def EMA(x, n, smoothing=2):
-    """ Calculate the exponential moving average of x in
-    [0:n+1, 1:n+2, ..., l-n:l+1].
-
-    The first EMA is a SMA (Simple Moving Average). """
-
-    ema = [average(x[:n], n)]  # The first sample is a SMA.
-
-    p = smoothing / (n+1)  # Rho, weight factor.
-
-    for price in x[n:]:
-        ema.append(price*p + ema[-1]*(1-p))
-
-    return ema
-
-
-def updateEMA(actual, previous, n, smoothing=2):
-    """ Return new value of EMA using the previous EMA sample. """
-    global ema
-
-    p = smoothing / (n+1)  # Rho, weight factor.
-    return actual*p + previous*(1-p)
-
-
-def relativeStrengthIndicator(x, period, n=1):
-    """Calculates the rsi-period of the last n samples."""
-    # may be inefficient and does not match with binance rsi
-    # Pass to talib the last n+period samples and remove NaN from the result.
-    return talib.RSI(np.array(x[-(n+period):]), period)[period:]
-
-
-def diff(x, N=1):
-    """Differentiate the array by n samples"""
-    return [x[n]-x[n-N] for n in range(N, len(x))]
-
-
-def wait():
-    """Make sure that there is sufficient time to do things before a 5 minute
-    candle closes.
-    (Wait till minute 6 or 1 if it is 5, 4 or 0, 9)
-    """
-    i = 0
-    while time.gmtime()[4] % 5 in {0, 4}:
-        print('Waiting until getting the requests' + '.'*(i % 4) + ' '*(4-i % 4),
-              end='\r')
-        i += 1
-        time.sleep(1)
 
 
 def init_wallet():
     global wallet
-    for crypto in cryptos:
-        wallet[crypto] = 0
-
     wallet['USDT'] = INIT_USDT
-    wallet['BNBFORFEE'] = INIT_BNB
+    wallet['BNB'] = INIT_BNB
+    wallet['BTCUSDT'] = 0
 
-
-def printThresholds():
-    print('CALCULATED THRESHOLDS:')
-    print('CRYPTO', ' '*14, 'SELL LIMIT', ' '*10, 'STOP LOSS')
-    print('-'*53)
-    for crypto in cryptos:
-        sellLimit, stopLoss = (str(round(x, 5) if x else None)
-                               for x in thresholds[crypto])
-
-        print(crypto, ' '*(20-len(crypto)), sellLimit,
-              ' '*(20-len(sellLimit)), stopLoss)
-    print('! Calculated Thresholds are not used in this version.')
-
-
-def calculateThresholds(crypto, verbose=False):
-    """ Calculate sell limit and stop loss based on the previous 24h.
-
-    returns:
-        (sell_limit, stop_loss) all in percentage (1 -> x1 -> 100%)
-        sell_limit is None if sell limit is less than x1.005
-    """
-    print('\n\nCalculate Thresholds of', crypto) if verbose else None
-    print(len(closes[crypto])) if verbose else None
-    # print(closes[crypto])
-    print(len(ma[crypto][50])) if verbose else None
-    # print(ma[crypto][50])
-    # print(ma[crypto][14])
-    print(len(ma[crypto][14])) if verbose else None
-    # print(ma[crypto][6])
-    print(len(ma[crypto][6])) if verbose else None
-    relaxThresholds = 0.8  # Percentage to relax calculated thresholds
-
-    i = 50+40  # First point to have all MAs (and not crash)
-    wins, losses = [], []  # Array of percentages up and down
-
-    while i < 498:  # 500 5min candlesticks (latest 41h 40min)
-        if isGoingToRise(crypto, usingGlobals=False, lastIndex=i):
-            print('\n\n Is going to rise', crypto) if verbose else None
-            # Calculate index of the next cross down
-            j = i+1
-            while j < 498:
-                if (ma[crypto][6][j] >= ma[crypto][14][j]
-                        and ma[crypto][6][j+1] < ma[crypto][14][j+1]):
-                    j += 1  # cross is made on j+1
-                    break
-                else:
-                    j += 1
-            else:
-                break  # No more crosses, exit the outer loop
-
-            (print(crypto, 'rose on', i, '(',
-                   time.gmtime(candles[crypto][i]['t']/1000), ') and fell on',
-                   j, '(', time.gmtime(candles[crypto][j]['t']/1000), ')')
-             if verbose else None)
-
-            # Get maximum (global) and minimum (on close) value
-            # that's because it is interesting to sell a win on any time
-            # but sell a loss only on a close.
-            actual = closes[crypto][i]
-            maximum = actual
-            minimum = actual
-            for k in range(i+1, j+1):
-                if candles[crypto][k]['h'] > maximum:
-                    maximum = candles[crypto][k]['h']
-                if closes[crypto][k] < minimum:
-                    minimum = closes[crypto][k]
-
-            if maximum != actual:
-                wins.append(maximum/actual - 1)
-            if minimum != actual:
-                losses.append(1 - minimum/actual)
-
-            i = j
-        else:
-            i += 1
-
-    print('len wins:', len(wins)) if verbose else None
-    print('len losses:', len(losses)) if verbose else None
-
-    avgWin = sum(wins)/len(wins) if len(wins) > 0 else 0
-    avgWin *= relaxThresholds
-
-    avgLoss = sum(losses)/len(losses) if len(losses) > 0 else 0
-    avgLoss *= relaxThresholds
-
-    return (avgWin, avgLoss) if avgWin > 0.005 else (None, None)
-
-
-def get_data(catchUp=False):
-    global candles, closes, ma, ema, rsi, thresholds, lastTradeTime
-
-    try:
-        for crypto in cryptos[:2]:
-            print('Catching up' if catchUp else 'Getting request of',
-                  crypto, end='\r')
-            if catchUp:
-                # Find the last correct closed candle
-                lastCloseTime = None
-                i = 1
-                while not lastCloseTime:
-                    # If the candle -i is a close candle
-                    if candles[crypto][-i]['x']:
-                        lastCloseTime = candles[crypto][-i]['T']/1000
-                    else:
-                        i += 1
-
-                # Get last close real time
-                timeNow = time.gmtime()
-                extraMin = timeNow.tm_min % 5
-                lastCloseRealTime = time.time()-extraMin*60-timeNow.tm_sec
-
-                # Difference in seconds
-                diffTime = int(lastCloseRealTime - lastCloseTime)
-
-                # Difference in 5 min candles
-                diffCandles = int(round(diffTime/(60*5), 1))
-
-                assert diffTime % (60*5) < 100, 'Misaligned time calculus'
-
-                # +1 because it requests the last non-closed too, which is
-                # not needed
-                limit = diffCandles+1 if diffCandles != 0 else None
-
-            else:
-                limit = 1000
-
-            # Get limit entries, if limit != 0
-            if limit:
-                url = ('https://api.binance.com/api/v3/klines?symbol='+crypto +
-                       '&interval=5m&limit='+str(limit))
-                try:
-                    # Remove last candle because it may not be closed
-                    newCandles = requests.get(url).json()[:-1]
-
-                    # Modify kline structure to match API with websocket
-                    newCandles = [{
-                        't': x[0],
-                        'T': x[6],
-                        's': crypto,
-                        'i': '5m',
-                        'f': None,
-                        'L': None,
-                        'o': x[1],
-                        'c': x[4],
-                        'h': float(x[2]),
-                        'l': x[3],
-                        'v': x[5],
-                        'n': x[8],
-                        'x': True,
-                        'q': x[7],
-                        'V': x[9],
-                        'Q': x[10],
-                        'B': x[11]
-                    } for x in newCandles]
-
-                    if not catchUp:
-                        candles[crypto] = []
-                        closes[crypto] = []
-                        ma[crypto] = {50: [None]*50, 14: [None]*14,
-                                      6: [None]*6}
-                        ema[crypto] = {50: [None]*50, 20: [None]*20}
-                        rsi[crypto] = []
-                        lastTradeTime[crypto] = None
-
-                    candles[crypto].extend(newCandles)
-                    closes[crypto].extend([float(x['c']) for x in newCandles])
-
-                    # Calculate moving averages
-                    for n in [6, 14, 50]:
-                        # Only calculate for the last int(limit)-1 values
-                        ma[crypto][n].extend(movingAverage(
-                                             closes[crypto][-limit+1:], n))
-
-                    # Calculate exponential moving averages
-                    for n in [20, 50]:
-                        # Only calculate for the last int(limit)-1 values
-                        ema[crypto][n].extend(EMA(
-                                              closes[crypto][-limit+1:], n))
-
-                    rsi[crypto].extend(relativeStrengthIndicator(
-                        closes[crypto], RSI_PERIOD, limit-1))
-
-                    # thresholds[crypto] = calculateThresholds(crypto,
-                    #                                         verbose=True)
-
-                    print('Catching up' if catchUp else 'Getting request of',
-                          crypto, ' '*(10-len(crypto)), 'OK')
-                except Exception as e:
-                    print('Catching up' if catchUp else 'Getting request of',
-                          crypto, ' '*(10-len(crypto)), 'ERROR', e)
-        print('\n\n\n')
-        # printThresholds()
-        # updateThresholds()
-
-    except Exception as e:
-        print('programming error on get_data:', e)
+    print("wallet initialized")
 
 
 def getBnbPrice():
@@ -287,233 +30,26 @@ def getBnbPrice():
     return float(requests.get(url).json()['price'])
 
 
-def updateThresholds():
-    with open('thresholds.json', 'w+') as textFile:
-        json.dump(thresholds, textFile)
+def calculate_function(long):
+    global stream
+    latest_price = stream.iloc[-1]['Price']
+
+    if long:
+        stop_loss = latest_price * (1 - RISK_PERCENTAGE / 100)
+        target = latest_price / (1 + RRRATIO * RISK_PERCENTAGE / 100)
+    else:
+        stop_loss = latest_price(1 + RISK_PERCENTAGE / 100)
+        target = latest_price / (1 - RRRATIO * RISK_PERCENTAGE / 100)
+    return target, stop_loss
 
 
-def updateCandles():
-    with open('candles.json', 'w+') as textFile:
-        json.dump(candles, textFile)
+'''
+Function to get past data and init indicators based on hat past data
+returns indicator objects and the previous data -> data, macd, rsi, volume indicator
+'''
 
 
-def updateTradeHistory(crypto, action, long, price, nCoins, total, fee, time,
-                       target=None, stop=None):
-    """
-    action: True if buy else sell
-    long: True if long else False for short
-    price in USDT
-    fee   in BNB
-    total in USDT (nCoins*price)
-    """
-    # global tradeHistory
-
-    trade = {
-        'crypto': crypto,
-        'time': time,
-        'action': 'Buy' if action else 'Sell',
-        'position': ('Long' if long else 'Short') + ' x' + str(LEVERAGE),
-        'stop': stop,
-        'target': target,
-        'price': price,
-        'filled': nCoins,
-        'fee': fee,
-        'total': round(total, 10)  # Avoid weird things like js
-    }
-    # tradeHistory.append(trade)
-
-    with open('tradeHistory.txt', 'a') as textFile:
-        textFile.write(json.dumps(trade)+'\n')
-
-
-def isGoingToRise(crypto, verbose=False):
-    try:
-        ema20 = ema[crypto][20][-3]
-        ema50 = ema[crypto][50][-3]
-        fractalMin = float(candles[crypto][-3]['l'])
-
-        print(ema20, '>', fractalMin, '>', ema50, '?') if verbose else None
-
-        print(fractalMin, '<', candles[crypto][-5]['l'],
-              '?') if verbose else None
-        print(fractalMin, '<', candles[crypto][-4]['l'],
-              '?') if verbose else None
-        print(fractalMin, '<', candles[crypto][-2]['l'],
-              '?') if verbose else None
-        print(fractalMin, '<', candles[crypto][-1]['l'],
-              '?') if verbose else None
-
-        # Is minimum fractal and the minimum is below the ema20 and above the
-        # ema50.
-        if (ema20 > fractalMin > ema50 and
-           fractalMin < float(candles[crypto][-5]['l']) and
-           fractalMin < float(candles[crypto][-4]['l']) and
-           fractalMin < float(candles[crypto][-2]['l']) and
-           fractalMin < float(candles[crypto][-1]['l'])):
-
-            print('Yes') if verbose else None
-            return True
-
-    except Exception as e:
-        print('Programming error on isGoingToRise:', e)
-
-    return False
-
-
-def isGoingToFall(crypto, verbose):
-    try:
-        ema20 = ema[crypto][20][-3]
-        ema50 = ema[crypto][50][-3]
-        fractalMax = float(candles[crypto][-3]['h'])
-
-        print(ema20, '<', fractalMax, '<', ema50, '?') if verbose else None
-
-        print(fractalMax, '>', candles[crypto][-5]['h'],
-              '?') if verbose else None
-        print(fractalMax, '>', candles[crypto][-4]['h'],
-              '?') if verbose else None
-        print(fractalMax, '>', candles[crypto][-2]['h'],
-              '?') if verbose else None
-        print(fractalMax, '>', candles[crypto][-1]['h'],
-              '?') if verbose else None
-
-        # Is maximum fractal and the maximum is above the ema20 and below the
-        # ema50.
-        if (ema20 < fractalMax < ema50 and
-           fractalMax > float(candles[crypto][-5]['h']) and
-           fractalMax > float(candles[crypto][-4]['h']) and
-           fractalMax > float(candles[crypto][-2]['h']) and
-           fractalMax > float(candles[crypto][-1]['h'])):
-
-            print('Yes') if verbose else None
-            return True
-
-    except Exception as e:
-        print('Programming error on isGoingToFall:', e)
-
-    return False
-
-
-def buy(crypto, long):
-    try:
-        global wallet, closes, currentCryptos
-
-        # Get the price to spend
-        if (wallet['USDT'] > 200 and currentCryptos < MAX_CURRENT_CRYPTOS and
-            (not lastTradeTime[crypto] or
-             time.time()-lastTradeTime[crypto] > 3600)):
-
-            print('Bought', 'long ' if long else 'short', 'x'+str(LEVERAGE),
-                  crypto, ' '*(9-len(crypto)), 'at', closes[crypto][-1])
-
-            usdtSpent = (INIT_USDT/MAX_CURRENT_CRYPTOS
-                         if wallet['USDT'] > INIT_USDT/MAX_CURRENT_CRYPTOS
-                         else wallet['USDT']/MAX_CURRENT_CRYPTOS)
-
-            wallet['USDT'] -= usdtSpent
-
-            # Buy coins
-            buyPrice = closes[crypto][-1]
-            nCoins = usdtSpent*LEVERAGE/buyPrice
-            wallet[crypto] = [nCoins, buyPrice, long]
-
-            # Fee
-            bnbPrice = getBnbPrice()
-            fee = (nCoins*buyPrice*MAKERFEERATE/bnbPrice if long else
-                   nCoins*buyPrice*TAKERFEERATE/bnbPrice)
-            wallet['BNBFORFEE'] -= fee
-
-            updateTradeHistory(crypto, True, long, buyPrice,
-                               nCoins, usdtSpent, fee, time.time(),
-                               stop=targetStop[crypto][0],
-                               target=targetStop[crypto][1])
-
-            currentCryptos += 1
-
-    except Exception as e:
-        print('programming error on buy:', e)
-
-
-def sell(crypto, price):
-    # target indicates whether the limit order has been executed
-    try:
-        global wallet, currentCryptos, lastTradeTime
-
-        nCoins = wallet[crypto][0]
-        buyPrice = wallet[crypto][1]
-
-        # Long position
-        if wallet[crypto][2]:
-            print('Sold long ', 'x'+str(LEVERAGE), crypto,
-                  ' '*(9-len(crypto)), 'at',
-                  round(price, 5), '('+str(wallet[crypto][1])+')',
-                  ('target' if price >= wallet[crypto][1] else 'stop  '),
-                  '('+str(round((price/wallet[crypto][1])*100-100, 3))+'%)')
-
-            wallet[crypto] = 0
-
-            # Here goes small algebra
-            usdtEarnt = nCoins * (price - buyPrice + buyPrice/LEVERAGE)
-            wallet['USDT'] += usdtEarnt
-
-            # Fee
-            bnbPrice = getBnbPrice()
-            fee = nCoins*price*TAKERFEERATE/bnbPrice
-            wallet['BNBFORFEE'] -= fee
-
-            updateTradeHistory(crypto, False, True, price, nCoins, usdtEarnt,
-                               fee, time.time())
-
-        # Short position
-        else:
-            print('Sold short', 'x'+str(LEVERAGE), crypto,
-                  ' '*(9-len(crypto)), 'at',
-                  round(price, 5), '('+str(wallet[crypto][1])+')',
-                  ('target' if price <= wallet[crypto][1] else 'stop  '),
-                  '('+str(round((1 - price/wallet[crypto][1])*100, 3))+'%)')
-
-            wallet[crypto] = 0
-
-            # Smaller algebra
-            usdtEarnt = nCoins * (buyPrice - price + buyPrice/LEVERAGE)
-
-            wallet['USDT'] += usdtEarnt
-
-            # Fee
-            bnbPrice = getBnbPrice()
-            fee = nCoins*price*MAKERFEERATE/bnbPrice
-            wallet['BNBFORFEE'] -= fee
-
-            updateTradeHistory(crypto, False, False, price, nCoins, usdtEarnt,
-                               fee, time.time())
-
-        lastTradeTime[crypto] = time.time()
-
-        currentCryptos -= 1
-
-    except Exception as e:
-        print('programming error on sell:', e)
-
-
-def handle_socket_message(msg):
-    columns = ['open_time', 'open', 'high', 'low', 'close', 'volume']
-    # Extract the relevant data from the WebSocket message
-    open_time = pd.to_datetime(int(msg['k']['t']), unit='ms')
-    open_price = float(msg['k']['o'])
-    high_price = float(msg['k']['h'])
-    low_price = float(msg['k']['l'])
-    close_price = float(msg['k']['c'])
-    volume = float(msg['k']['v'])
-
-    # Append a new row to the DataFrame
-    row = pd.DataFrame([[open_time, open_price, high_price,
-                       low_price, close_price, volume]], columns=columns)
-    df = df.append(row, ignore_index=True)
-
-    # TODO update indicators
-
-
-def init_socket():
+def get_data():
     # Define the column names for the DataFrame
     columns = ['open_time', 'open', 'high', 'low', 'close', 'volume']
 
@@ -522,12 +58,17 @@ def init_socket():
     # Get Past one hour data and store into database
 
     # Calculate the start and end timestamps for the desired 1-hour period
-    end_time = datetime.now()
-    start_time = end_time - timedelta(hours=1)
-    interval = Client.KLINE_INTERVAL_5MINUTE
+    end_time = str(datetime.utcnow())
+    start_time = str(datetime.utcnow() - timedelta(hours=1))
+    interval = Client.KLINE_INTERVAL_1MINUTE
+
     # Retrieve the Kline data from the Binance API
-    klines = client.get_historical_klines(symbol, interval, start_time.strftime(
-        '%Y-%m-%d %H:%M:%S'), end_time.strftime('%Y-%m-%d %H:%M:%S'))
+    klines = client.get_historical_klines(
+        symbol=symbol,
+        interval=interval,
+        start_str=str(start_time),
+        end_str=str(end_time)
+    )
 
     # Iterate over the retrieved Kline data and insert it into the database
     for kline in klines:
@@ -542,174 +83,264 @@ def init_socket():
         # Append a new row to the DataFrame
         row = pd.DataFrame([[open_time, open_price, high_price,
                              low_price, close_price, volume]], columns=columns)
-        df = df.append(row, ignore_index=True)
+        df = pd.concat([df, row], ignore_index=True)
 
-    # Create a WebSocket client
-    websocket_client = Client(api_key=apiKey, api_secret=secretKey)
+    # Init Indicators
+    macd = MACD(data=df)
+    rsi = RSI(data=df)
+    volumeIndicator = VolumeIndicator(data=df)
 
-    # # Define the stream name
-    # stream_name = symbol + '@kline_5m'
+    return [df, macd, rsi, volumeIndicator]
 
-    # Define the WebSocket callback function
-    def websocket_callback(msg):
-        handle_socket_message(msg)
 
-    def websocket_error(err):
+'''
+Function to get the BNB fees for transaction
+returns float value representing fees in BNB
+'''
+
+
+def get_fees():
+    bnb_price = getBnbPrice()
+    # Buying for TRADE_SIZE usdt
+    bnb_fees = TRADE_SIZE * TAKER_TRADING_FEE/bnb_price
+    return bnb_fees
+
+
+'''
+function to check prerequisite
+returns bool value
+'''
+
+
+def prereq():
+    global wallet
+    print(wallet)
+    if wallet['BNB'] < get_fees():
+        print("ADD MORE BNB")
+    return wallet['USDT'] > TRADE_SIZE and wallet['BNB'] > get_fees()
+
+
+'''
+function to execute orders with binance or locally
+First created locally
+'''
+
+
+def buy_order(order):
+    # BUY ORDER ON Binance Wallet
+    pass
+
+
+def sell_order(order):
+    # SELL ORDER ON BINANCE WALLET
+    pass
+
+
+def execute_order(order, triggered):
+    print("exec order checking")
+    global stream, open_orders, open_position
+
+    latest_row = stream.iloc[-1]
+    trade_time, trade_price, trade_fees = latest_row['Time'], latest_row['Price'], get_fees(
+    )
+
+    if triggered == False:
+        # just place order with order type and keep it market order.
+        order.trade_executed(trade_price, trade_time, trade_fees)
+        # Check order type
+        if order.long:
+            if TEST:
+                # BUY ORDER
+                # changes to the wallet
+                wallet['USDT'] -= 10
+                wallet['BNB'] -= trade_fees
+                wallet['BTC'] += order.btcQuant
+            else:
+                buy_order(order)
+        else:
+            if TEST:
+                # SELL ORDER
+                wallet['USDT'] += 10
+                wallet['BNB'] -= trade_fees
+                wallet['BTC'] -= order.btcQuant
+            else:
+                sell_order(order)
+
+    else:
+        # market order
+        order.complete_trade(trade_price, trade_time, trade_fees)
+        open_position = False
+        # Check order type
+        if order.long:
+            if TEST:
+                # closing BUY ORDER => sell btc
+                # changes to the wallet
+                wallet['USDT'] += trade_price * order.btcQuant
+                wallet['BNB'] -= trade_fees
+                wallet['BTC'] -= order.btcQuant
+            else:
+                buy_order(order)
+        else:
+            if TEST:
+                # closing SELL ORDER => buy back btc
+                wallet['USDT'] -= trade_price * order.btcQuant
+                wallet['BNB'] -= trade_fees
+                wallet['BTC'] += order.btcQuant
+            else:
+                sell_order(order)
+    print("exec order checked")
+
+
+'''
+    Function to handle message from socket on price ticker
+    also checks if open trade is triggered or not
+'''
+
+
+def handle_price_message(ws, msg):
+    global stream, open_position, open_orders
+    symbol, time, price = msg['s'], msg["E"], msg['c']
+
+    df = {
+        'Symbol': symbol,
+        'Time': pd.to_datetime(time, unit='ms'),
+        'Price': float(price)
+    }
+    row = pd.DataFrame(df, index=[0])
+    stream = pd.concat([stream, row], ignore_index=True)
+
+    # check close position on latest candle
+    if open_position:
+        temp = open_orders[0]
+        if temp.long and (price < temp.sl or price > temp.target):
+            execute_order(temp, True)
+        if not temp.long and (price > temp.sl or price < temp.target):
+            execute_order(temp, True)
+
+
+'''
+    Function to handle message from on candlestick
+'''
+
+
+def handle_kline_message(ws, msg):
+    # print("Type is - ")
+    # when candle is closed
+    if msg['k']['x'] == False:
+        pass
+    elif msg['k']['x'] == True:
+        print("Candle Received")
+
+        # reset datastream
+        global stream, data, open_position, macdIndicator, rsiIndicator, volumeIndicator, open_orders
+        stream = pd.DataFrame(columns=['Symbol', 'Time', 'Price'])
+
+        columns = ['open_time', 'open', 'high', 'low', 'close', 'volume']
+        # Extract the relevant data from the WebSocket message
+        open_time = pd.to_datetime(int(msg['k']['t']), unit='ms')
+        open_price = float(msg['k']['o'])
+        high_price = float(msg['k']['h'])
+        low_price = float(msg['k']['l'])
+        close_price = float(msg['k']['c'])
+        volume = float(msg['k']['v'])
+        # Append a new row to the DataFrame
+        row = pd.DataFrame([[open_time, open_price, high_price,
+                             low_price, close_price, volume]], columns=columns)
+        data = pd.concat([data, row],  ignore_index=True)
+
+        # update indicators and get signals
+        signals = {}
+        signals['MACD'] = macdIndicator.update_trade_signal(data)
+        signals['RSI'] = rsiIndicator.update_trade_signal(data)
+        signals['volume'] = volumeIndicator.get_signal(data)
+
+        if open_position == False and prereq():
+            print("PRINTING The SIGNALS")
+            print(signals)
+            # CONDITION FOR LONG TRADE
+            if signals['MACD'] == "Buy" and signals['volume']:
+                open_position = True
+                long = True
+                print("-------------------LONG TRADE----------------------------")
+                # calculate target and stop loss
+                target, sl = calculate_function(long)
+                # trade_time = pd.to_datetime(msg['E'], unit='ms')
+                order = OpenOrder(long, target, sl)
+                open_orders = [order]
+                # execute trade and get the buy price
+                execute_order(order, False)
+
+            # CONDITION FOR SHORT TRADE
+            elif signals['MACD'] == "Sell" and signals['volume']:
+                open_position = True
+                long = False
+                print("-------------------SHORT TRADE----------------------------")
+                # calculate target and stop loss
+                target, sl = calculate_function(long)
+
+                # trade_time = pd.to_datetime(msg['E'], unit='ms')
+                order = OpenOrder(long, target, sl)
+                open_orders = [order]
+                # execute trade and get the buy price
+                execute_order(order, False)
+
+            else:
+                print("-------------------NO TRADE----------------------------")
+        # Position is already open, cannot take another position for now
+        else:
+            print("Already one position is open")
+
+
+'''
+    Function to initialize socket
+'''
+
+
+def init_socket():
+    base_url = 'wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/btcusdt@kline_1m'
+    streams = {
+        'price': 'btcusdt@ticker',
+        'candle': 'btcusdt@kline_1m'
+    }
+
+    def on_open(ws):
+        print("open")
+
+    def on_message(ws, msg):
+        data = json.loads(msg)
+        stream_name = data['stream']
+
+        if stream_name == streams['price']:
+            handle_price_message(ws, data['data'])
+
+        if stream_name == streams['candle']:
+            handle_kline_message(ws, data['data'])
+
+    def on_error(ws, err):
         print("Error with the socket - ", err)
         # TODO - consider already open offers.
-        client.stop_socket(websocket_client)
 
-    # Start the WebSocket stream
-    websocket_client.start_kline_socket(
-        callback=websocket_callback, symbol=symbol,
-        interval=Client.KLINE_INTERVAL_5MINUTE,
-        error=websocket_error).run_forever()
+    def on_close(ws):
+        # WebSocket connection closed
+        print("WebSocket connection closed")
+    stream_socket = websocket.WebSocketApp(base_url,
+                                           on_open=on_open,
+                                           on_message=on_message,
+                                           on_error=on_error,
+                                           on_close=on_close
+                                           )
 
-    # global ws
-
-    # # Wait till there is sufficient time between requests and new candlesticks
-    # wait()
-
-    # ws = None
-
-    # SOCKET = 'wss://stream.binance.com:9443/stream?streams='+stream5m_test
-
-    # # If 5 seconds passed since last connection response, raise an error.
-    # websocket.setdefaulttimeout(5)
-    # ws = websocket.WebSocketApp(SOCKET, on_open=on_open, on_close=on_close,
-    #                             on_message=on_message, on_error=on_error)
-    # ws.run_forever()
-
-
-# def on_open(ws):
-#     print('Opened connection.')
-#     global connectionFailed
-
-#     get_data(connectionFailed)
-
-#     connectionFailed = False
-
-
-# def on_close(ws):
-#     print('Closed connection.')
-
-
-# def on_error(ws, err):
-#     print('Socket disconnected due to', err)
-#     print('Trying to reconnect socket...')
-#     global connectionFailed
-
-#     time.sleep(5)
-
-#     connectionFailed = True
-#     # Close current websocket to avoid overlapping multiple connections
-#     # when connection returns
-#     ws.close(status=1002)
-
-#     print('Trying to recover lost data...')
-#     init_socket()
-
-
-def on_message(ws, message):
-    try:
-        kline = json.loads(message)['data']['k']  # Just load the kline
-
-        print(kline['s'], '     ', end='\r')  # See crypto symbol
-
-        # Do calculations only when the candle is closed
-        if kline['x']:
-            # print('\n', time.asctime(time.gmtime(time.time())), '\n')
-            global candles, closes, ma, sma, rsi, wallet, targetStop
-
-            crypto = kline['s']
-            closes[crypto].append(float(kline['c']))
-            candles[crypto].append(kline)
-
-            # Update the candles only when the candles from all cryptos are
-            # closed.
-            # Because there are three crypto symbols that don't work,
-            # we need to count until 71 (len-1) TODO
-            # TODO take out the invalid crypto pairs and make all() to avoid
-            # traversing everything
-            # currently only 2 cryptos
-            size = len(closes[crypto])
-            if sum([len(close) == size for close in closes.values()]) == 2:
-                updateCandles()
-
-            # Update calculations
-            for n in [6, 14, 50]:
-                ma[crypto][n].append(average(closes[crypto], n))
-                # print('\nMA'+str(n)+' append:', average(closes[crypto], n))
-
-            for n in [20, 50]:
-                ema[crypto][n].append(updateEMA(closes[crypto][-1],
-                                                ema[crypto][n][-1], n))
-
-            rsi[crypto].append(relativeStrengthIndicator(closes[crypto],
-                                                         RSI_PERIOD)[0])
-
-            # If there are coins owned
-            if wallet[crypto]:
-
-                # If it is a long position
-                if wallet[crypto][2]:
-                    # Take profit.
-                    if float(kline['h']) >= targetStop[crypto][1]:
-                        sell(crypto, targetStop[crypto][1])
-                    # Stop loss.
-                    elif float(kline['l']) <= targetStop[crypto][0]:
-                        sell(crypto, targetStop[crypto][0])
-
-                # If it is a short position
-                else:
-                    # Take profit.
-                    if float(kline['l']) <= targetStop[crypto][1]:
-                        sell(crypto, targetStop[crypto][1])
-                    # Stop loss.
-                    elif float(kline['h']) >= targetStop[crypto][0]:
-                        sell(crypto, targetStop[crypto][0])
-
-            # Look for buying long
-            elif isGoingToRise(crypto, verbose=False):
-                price = closes[crypto][-1]
-
-                stop = ema[crypto][50][-3]
-                target = price + (price-stop)*RRRATIO
-
-                targetStop[crypto] = [stop, target]
-
-                if target/price > 1.001:  # Avoid ultra low profit (>0.1%)
-                    buy(crypto, True)
-
-            # Look for buying short
-            elif isGoingToFall(crypto, verbose=False):
-                price = closes[crypto][-1]
-
-                stop = ema[crypto][50][-3]
-                target = price - (stop-price)*RRRATIO
-
-                targetStop[crypto] = [stop, target]
-
-                # Profit (% x1) > 0.001 <=> 1 - target/price > 0.001
-                if target/price <= 0.999:
-                    buy(crypto, False)
-
-    except Exception as e:
-        print('programming error at on_message:', e)
+    stream_socket.run_forever()
 
 
 # Constants
-RSI_PERIOD = 14
 INIT_USDT = 1000
 INIT_BNB = 10  # Needed to pay fees
 
-MAX_CURRENT_CRYPTOS = 20  # Stop buying if this number of positions are open
-MIN_USDT = 200  # Stop buying if this number is reached
+RRRATIO = 2  # Risk Reward Ratio
+RISK_PERCENTAGE = 2
 
-RRRATIO = 1.5  # Risk Reward Ratio
-LEVERAGE = 5  # Futures leverage
-MAKERFEERATE = 0.00018
-TAKERFEERATE = 0.00036
+TEST = True
 
 apiKey = os.getenv('API_KEY')
 secretKey = os.getenv('SECRET_KEY')
@@ -734,23 +365,6 @@ When selling:
 
 """
 
-# Globals
-candles = {}
-closes = {}
-
-# tresholds[crypto] = [sell_limit, stop_loss] (percentage x1)
-thresholds = {}
-
-# targetStop[crypto] = [stop_price, target_price] (price, not percentage)
-targetStop = {}
-
-lastTradeTime = {}
-
-ma = {}
-ema = {}
-rsi = {}
-# tradeHistory = []
-currentCryptos = 0
 
 """ Indicates how many coins are in the wallet
     wallet[crypto] = (amount, priceOfBuy, long)
@@ -758,13 +372,33 @@ currentCryptos = 0
                False if short position 
 """
 wallet = {}
-# State representing if the websocket connection is lost to request lost data.
-connectionFailed = False
 
 init_wallet()
 
-# Initialize websocket connection
-ws = None  # socket
 symbol = 'BTCUSDT'
 client = Client(api_key=apiKey, api_secret=secretKey)
-init_socket()
+open_position = False
+# to store the open order object
+open_orders = []
+data, macdIndicator, rsiIndicator, volumeIndicator = get_data()
+
+stream = pd.DataFrame(columns=['Symbol', 'Time', 'Price'])
+
+# print('data')
+# print(data.tail)
+
+# print('indicators')
+# print('MACD')
+# print(macd.macd_data)
+
+# print('RSI')
+# print(rsi.rsi_values)
+
+# print("volume")
+# print(volume.volume)
+# threading.Thread(target=receive_stream).start()
+threading.Thread(target=init_socket).start()
+
+while True:
+    time.sleep(20)
+    print(stream.shape, data.shape)
