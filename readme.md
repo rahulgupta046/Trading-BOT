@@ -19,30 +19,15 @@
 ## Trading bot
 
 ### Strategy
-
-The trading bot mainly follows the [Williams fractal indicator](https://www.tradingview.com/support/solutions/43000591663-williams-fractal/) as a signal combined with Exponential Moving averages to use a variation of the [Williams Alligator indicator](https://www.ifcmarkets.co.in/en/ntx-indicators/alligator) to check market conditions.
-
-Whenever a buy or sell fractal is fired, it uses the (Exponential Moving Average) EMA_20 and EMA_50 to check for market conditions. The strategy makes the signals like this:
-
-- The price will increase if a fractal is minimum fractal and is below the EMA_20 and above the EMA_50 (EMA_20 > min_fractal > EMA_50).
-- The price will decrease if a fractal is maximum fractal and is above the EMA_20 and below he EMA_50 (EMA_20 > min_fractal > EMA_50).
-
-Once there is a signal, the target price and stop loss limit are calculated:
-
-- `stop loss`: the 50-Exponential-Moving-Average on the fractal instant
-- `target price`: actual price - (actual price - stop loss) \* RRRATIO (Risk Reward Ratio, default at 1.5 but changable)
-
-This prices can be changed, the trading bot also calculates the optimum `stop loss` and `target price` using the last 24h candlesticks and making optimum past trades (backtesting) each time the bot runs. It can be useful when the market does not fluctuate a lot, where it can be correlated with the previous day. If the user changes the timeframe period, can use more or less historical data than 24h regarding binance API limits.
-
-Of course, there is a 10-minute delay (in a 5-minute timeframe) between the fractal and the real signal in order to make the fractal calculation, because it uses the last 5 candlestick. The calculation of a fractal is made checking maximum or minimum of a centered candlestick in a window of length 5 (a fractal is not a casual system, depends on future samples). You can research more about fractals on the link above.
+Users can select from multiple technical indicators with customizable parameters individually or in a group to decide when the trade is made. By default only 1 trade at a time with only 1 asset. 
 
 ### How does it work?
 
-With the default 5-minute timeframe, first it waits the optimum time once to retrieve old data and start listening to the real-time websocket once the trading bot starts running. That is done because getting API data is not instant, and can take more than a minute to get all the past candlesticks for all the pairs. It simply makes sure that there is sufficient time to do things before a 5-minute candle closes. (Wait till minute 6 or 1 if it is minute 5, 4 or minute 0, 9 respectively).
+With the default 1 hr timeframe, first it waits the optimum time once to retrieve old data and start listening to the real-time WebSocket once the trading bot starts running. That is done because getting API data is not instant and can take more than a minute to get all the past candlesticks for all the pairs. It simply makes sure that there is sufficient time to do things before a 1-hr candle closes. (wait a minute after the candle close and place a market order when the indicator gives the signal.)
 
-Then starts running the binance websocket. Because we have previously waited, we can now retrieve past candlestick data. This process also cleans and processes the data to use less memory and faster later access.
+Then starts running the WebSocket. Because we have previously waited, we can now retrieve past candlestick data. This process also cleans and processes the data to use less memory and faster later access.
 
-Each time the websocket receives data, it first checks that the candlestick is indeed closed, then starts calculating fractals, EMAs and conditions in order to make buy or sell actions.
+Each time the WebSocket receives data, it first checks that the candlestick is indeed closed, then starts calculating indicator values and conditions in order to make buy or sell actions.
 
 The bot makes long and short trades according to the strategy. Once it makes a buy or sell action, it logs to the console and to the _.json_ file, in order to send the data to the user using the Telegram bot.
 
