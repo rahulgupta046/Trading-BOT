@@ -31,32 +31,6 @@ Each time the WebSocket receives data, it first checks that the candlestick is i
 
 The bot makes long and short trades according to the strategy. Once it makes a buy or sell action, it logs to the console and to the _.json_ file, in order to send the data to the user using the Telegram bot.
 
-### Some constants that can be changed
-
-- `RSI_PERIOD = 14`: The period of RSI calculation (RSI not used by default, but the user can use it to check for market conditions)
-- `INIT_USDT = 1000`: Initial USDT amount to invest
-- `INIT_BNB = 10`: Initial BNB amount to pay fees
-
-- `MAX_CURRENT_CRYPTOS = 20`: Stop buying if this number of positions are open. Also, it will be invested the current USDT divided by `MAX_CURRENT_CRYPTOS` on each trade.
-- `MIN_USDT = 200`: Stop buying if this amount of current USDT is reached
-
-- `RRRATIO = 1.5`: Risk Reward Ratio for the target price calculation
-- `LEVERAGE = 5`: Leverage for margin trading
-- `MAKERFEERATE = 0.00018`: The percentage (per one) of maker fee
-- `TAKERFEERATE = 0.00036`: The percentage (per one) of taker fee
-
-## Telegram bot
-
-### How does it work?
-
-Each time the trading bot makes a trade, it will log the information in a _.json_ file. So, the Telegram bot can have access to that information, without blocking the main thread of the trading bot.
-
-So, the Telegram bot actually runs in paral·lel and does not interfere with the trading bot. You can choose wether to run the telegram bot or not. The telegram bot can not in any circumstances send orders to the trading bot, so the user does not directly interact with it. It only informs the user as they ask for information.
-
-The Telegram bot only sends information to a single specific user, so you have to type the user ID on top of _telegram_bot.py_ so the bot can check that it is indeed sending information only to the desired user. The user ID is a number that can be seen each time a user sends a message to the Telegram bot.
-
-It is useful to track trade information on the go, so you do not have to look at the console every time, which may be tedious. Each time a trade is made, it will send a message with the trade information. Each trade has a unique ID that is shared between the buy and sell action. For example, the bot detects a signal and buys some tokens from a pair. That buy signal would have an ID. When the bot sells that pair, it will have the same ID, so you can track the trade easily.
-
 ## Set up
 
 ### Install Python dependencies
