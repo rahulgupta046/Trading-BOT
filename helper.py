@@ -1,7 +1,7 @@
 # variables
 import csv
-TRADE_SIZE = 10
-LOG_FILE = 'trade_log.csv'
+TRADE_SIZE = 100
+LOG_FILE = 'binance-crypto-trading-bot/trade_log.csv'
 TAKER_TRADING_FEE = 0.00075
 
 
@@ -11,6 +11,7 @@ class OpenOrder:
         self.target = target
         self.sl = sl
         self.completed = False
+        self.btcQuant = None
 
     def trade_executed(self, enter_price, enter_time, fees):
         self.enterPrice = enter_price
@@ -18,13 +19,16 @@ class OpenOrder:
         self.enterfees = fees
         self.btcQuant = TRADE_SIZE/enter_price
 
+        print("ENTRY TRADE")
         data = {
             'LONG': self.long,
-            'trade_price': self.enterPrice,
-            'trade_time': self.enterTime,
+            'entry_price': self.enterPrice,
+            'entry_time': self.enterTime,
+            'target': self.target,
+            'SL': self.sl
         }
-        # log the entry trade
         print(data)
+        # log the entry trade
 
     def complete_trade(self, exit_price, exit_time, exit_fees):
         self.completed = True
@@ -32,13 +36,16 @@ class OpenOrder:
         self.exitTime = exit_time
         self.exitFees = exit_fees
 
+        print("EXIT TRADE")
         data = {
             'LONG': self.long,
-            'trade_price': self.exitPrice,
-            'trade_time': self.exitTime,
+            'exit_price': self.exitPrice,
+            'exit_time': self.exitTime,
+            'target': self.target,
+            'SL': self.sl
         }
-        # log the exit trade
         print(data)
+        # log the exit trade
 
         '''
         log this trade
@@ -47,29 +54,30 @@ class OpenOrder:
 
         # LONG TRADE
         if self.long:
-            self.profit = TRADE_SIZE * \
-                (self.exitPrice - self.enterPrice) - self.fees
+            self.profit = self.btcQuant * \
+                (self.exitPrice - self.enterPrice)
             outcome = 'PROFIT' if self.enterPrice < self.exitPrice else "LOSS"
-            profit_pl = round(self.profit/self.enterPrice, 2) * 100
+            profit_pl = round(self.profit/self.enterPrice, 5) * 100
         # SHORT TRADE
         else:
-            self.profit = TRADE_SIZE * \
-                (self.enterPrice - self.exitPrice) - self.fees
+            self.profit = self.btcQuant * \
+                (self.enterPrice - self.exitPrice)
             outcome = 'PROFIT' if self.enterPrice > self.exitPrice else "LOSS"
-            profit_pl = round(self.profit/self.exitPrice, 2) * 100
+            profit_pl = round(self.profit/self.exitPrice, 5) * 100
         # STORE to CSV
 
         data = {
             'POSITION': 'LONG' if self.long else 'SHORT',
-            'QUANTITY': TRADE_SIZE,
+            'QUANTITY': round(self.btcQuant, 7),
             'ENTER PRICE': self.enterPrice,
             'EXIT PRICE': self.exitPrice,
             'OUTCOME': outcome,
             'PL VALUE': self.profit,
             'PL PERCENTAGE': profit_pl
         }
+
         with open(LOG_FILE, 'a') as file:
-            writer = csv.DictWriter(file, fieldnames=list(data.keys))
+            writer = csv.DictWriter(file, fieldnames=list(data.keys()))
             writer.writerow(data)
 
 

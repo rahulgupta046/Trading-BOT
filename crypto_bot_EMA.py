@@ -114,7 +114,6 @@ returns bool value
 
 def prereq():
     global wallet
-    print("checking prereq")
     print(wallet)
     if wallet['BNB'] < get_fees():
         print("ADD MORE BNB")
@@ -125,6 +124,16 @@ def prereq():
 function to execute orders with binance or locally
 First created locally
 '''
+
+
+def buy_order(order):
+    # BUY ORDER ON Binance Wallet
+    pass
+
+
+def sell_order(order):
+    # SELL ORDER ON BINANCE WALLET
+    pass
 
 
 def execute_order(order, triggered):
@@ -140,16 +149,22 @@ def execute_order(order, triggered):
         order.trade_executed(trade_price, trade_time, trade_fees)
         # Check order type
         if order.long:
-            # BUY ORDER
-            # changes to the wallet
-            wallet['USDT'] -= 10
-            wallet['BNB'] -= trade_fees
-            wallet['BTC'] += order.btcQuant
+            if TEST:
+                # BUY ORDER
+                # changes to the wallet
+                wallet['USDT'] -= 10
+                wallet['BNB'] -= trade_fees
+                wallet['BTC'] += order.btcQuant
+            else:
+                buy_order(order)
         else:
-            # SELL ORDER
-            wallet['USDT'] += 10
-            wallet['BNB'] -= trade_fees
-            wallet['BTC'] -= order.btcQuant
+            if TEST:
+                # SELL ORDER
+                wallet['USDT'] += 10
+                wallet['BNB'] -= trade_fees
+                wallet['BTC'] -= order.btcQuant
+            else:
+                sell_order(order)
 
     else:
         # market order
@@ -157,16 +172,22 @@ def execute_order(order, triggered):
         open_position = False
         # Check order type
         if order.long:
-            # closing BUY ORDER => sell btc
-            # changes to the wallet
-            wallet['USDT'] += trade_price * order.btcQuant
-            wallet['BNB'] -= trade_fees
-            wallet['BTC'] -= order.btcQuant
+            if TEST:
+                # closing BUY ORDER => sell btc
+                # changes to the wallet
+                wallet['USDT'] += trade_price * order.btcQuant
+                wallet['BNB'] -= trade_fees
+                wallet['BTC'] -= order.btcQuant
+            else:
+                buy_order(order)
         else:
-            # closing SELL ORDER => buy back btc
-            wallet['USDT'] -= trade_price * order.btcQuant
-            wallet['BNB'] -= trade_fees
-            wallet['BTC'] += order.btcQuant
+            if TEST:
+                # closing SELL ORDER => buy back btc
+                wallet['USDT'] -= trade_price * order.btcQuant
+                wallet['BNB'] -= trade_fees
+                wallet['BTC'] += order.btcQuant
+            else:
+                sell_order(order)
     print("exec order checked")
 
 
@@ -234,8 +255,10 @@ def handle_kline_message(ws, msg):
         signals['volume'] = volumeIndicator.get_signal(data)
 
         if open_position == False and prereq():
+            print("PRINTING The SIGNALS")
+            print(signals)
             # CONDITION FOR LONG TRADE
-            if signals['MACD'] == signals["RSI"] == "Buy" and signals['volume']:
+            if signals['MACD'] == "Buy" and signals['volume']:
                 open_position = True
                 long = True
                 print("-------------------LONG TRADE----------------------------")
@@ -248,7 +271,7 @@ def handle_kline_message(ws, msg):
                 execute_order(order, False)
 
             # CONDITION FOR SHORT TRADE
-            elif signals['MACD'] == signals["RSI"] == "Sell" and signals['volume']:
+            elif signals['MACD'] == "Sell" and signals['volume']:
                 open_position = True
                 long = False
                 print("-------------------SHORT TRADE----------------------------")
@@ -316,6 +339,8 @@ INIT_BNB = 10  # Needed to pay fees
 
 RRRATIO = 2  # Risk Reward Ratio
 RISK_PERCENTAGE = 2
+
+TEST = True
 
 apiKey = os.getenv('API_KEY')
 secretKey = os.getenv('SECRET_KEY')
