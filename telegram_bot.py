@@ -1,5 +1,5 @@
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
-import json, time, requests, pprint
+import json, time, requests, pprint 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
